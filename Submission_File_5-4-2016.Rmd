@@ -1,0 +1,611 @@
+---
+title: "Factors Associated with Shark Attack"
+output: html_document
+---
+```{r, echo=FALSE}
+options(warn=-1)
+
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(randomForest))
+suppressPackageStartupMessages(library(stringr))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(pROC))
+suppressPackageStartupMessages(library(hydroGOF))
+```
+
+###Team Members:
+
+Bethany Earnest
+
+Ruth Cheng
+
+Sam Fisher
+
+###Instructions to Access Files:
+All files can be accessed through the following link: [Shark_Attack_Project_2016](https://github.com/bethany-earnest/Shark_Attack_Project_2016.git)
+
+
+#Overview, Motivation, and Related Work:
+Shark attack data, possibly due to its gruesome nature, has been somewhat faithfully recorded starting as far back as the first seafaring peoples. As an avid Shark Week fan and a sailor, thus a seafaring person myself, I have always been fascinated with sharks and with how sharks interact with people. I'm always interested to hear the newest shark rules of engagement and have watched the rules change over the years as Shark Week has become an ever increasing force in the effort to educate the population about sharks and how we must behave to safely share their environment. 
+
+It's macabre, but I'm particularly amused to see those rules disproven, as they were in this case: 
+
+
+[Shark Expert Attacked While Filming](https://www.youtube.com/watch?v=7pjbH5OuBc4)
+
+
+Using the Global Shark Attack File, a comprehensive data set capturing shark attack data from as far back as 1845, in combination with data from the National Oceanic and Atmospheric Administration (NOAA), we were able to identify patterns in attack data pertaining not only to human behavior but to location, time of year, and gender of the victim. 
+
+[Global Shark Attack File](http://www.sharkattackfile.net/)
+
+
+[National Oceanic and Atmospheric Administration](http://www.noaa.gov/)
+
+
+#Initial Question:
+Staring out, we had three questions we would like to answer:
+
+1)	What variables are associated with a shark attack being fatal?
+2)	Over time, are there elements that contribute to an increase (or decrease) in shark attacks in a given area?
+3)	Could we use the elements of the attack (where it was, when it was, how it was committed) to cluster similar attacks in such a way as to draw conclusions about the offending shark species, in cases where a species had not been identified?
+
+We quickly realized that our set of questions, given the state of the data, were perhaps a bit ambitious. After meeting with our TA, we elected to limit the focus of our study to the first question: what variables are associated with a shark attack being fatal?
+
+
+#Data:
+Our data was sourced from three primary locations: the Global Shark Attack File, the NOAA website, and, though we did not end up using it, shark species data from the Support Our Sharks organization, located here: 
+
+
+[Shark Database](http://www.supportoursharks.com/en/education/biology/Shark_Database/List_of_Sharks.htm)
+
+
+Some details on how each type of data was collected are captured below. Additional details are captured in the HTML files linked both here and in the data load section pertaining to each variable.
+
+###Activity:
+
+[Activity](Activity.html)
+
+###Species:
+
+[Species](Species.html)
+
+###Temp:
+
+The main goal of the data exploration is to retrieve sea surface temperature (SST) from the NOAA web site, which hosts 36 files storing data from 1981 to 2016.  Each file (~450 MB) stores daily mean SST each year.  The stark attack dataset provides the attack location, area, and country, which are used for the conversion to (latitude, longitude) coordinate via google API.  Some locations were not recorded correctly or accurately, so manual correction was required.  Via visualizing the attack locations marked on the map, we can further clean erroneous data points.  The temperature (SST) is one of explanatory variables in the shark attack data analytics.  Apply the algorithm, which is designed to extend the area (5 degrees in each direction) in case a NA value is returned for a specific location, to the shark attack data.  Mean value is calculated from all the values in the extension area.  Temperature values with respect to each attack incident are saved to a file provided for data analytics.
+
+[Temp](TempMap-Cheng.html)
+
+###Coastline:
+
+Our coastline data was sourced from NOAA, by way of Wikipedia, through the expedient of copy and paste from the following site to excel. From there it was converted into a CSV and loaded into R to be bound into the analysis data set as a new variable. 
+
+
+[States by Coastline](https://en.wikipedia.org/wiki/List_of_U.S._states_by_coastline)
+
+
+Major variable creation and collection aside, the not insubstantial tactical effort of data curation is captured in detail in the following sections, including visualizations, modeling, and comments. 
+
+
+
+###Create Data Set
+####Load Raw Attack Data
+```{r}
+path<-"Y:/Personal/Harvard/Spring2016/Project/Source_Data/"
+#path<-"C:/Users/bethany.earnest/Desktop/Harvard/Spring2016/Project/"
+
+#Load Attack Data
+Attacks <- read.csv(paste(path,"Shark_Attack_Data_4-7-2016.csv", sep=""))
+
+#Remove Non Value Add Columns
+Non_Value<-names(Attacks) %in% c("pdf","href.formula","href","Case.Number.1","Case.Number.2","original.order","X","X.1")       
+Attacks<-Attacks[!Non_Value]
+
+#Subset out other countries and inappropriate years
+Attacks<-droplevels(subset(Attacks, 
+                           Country=="USA" &
+                            Year>1980))
+```
+####Load Engineered Features
+#####For details on how each feature was engineered, see supplimental links below each load script to access the associated html file.
+```{r}
+Activities<-read.csv(paste(path,"Sam_Activities_5-4-2016.csv", sep=""))
+Activities$Case.Number<-Activities$CaseNumber
+Activities$CaseNumber<-NULL
+```
+[Activity](Activity.html)
+```{r}
+Species<-read.csv(paste(path,"Sam_Species_5-3-2016.csv", sep=""))
+Species$Case.Number<-Species$CaseNumber
+Species$CaseNumber<-NULL
+```
+[Species](Species.html)
+```{r}
+Temp<-read.csv(paste(path,"Ruth_Temp_5-3-2016.csv", sep=""))
+Temp$Case.Number<-Temp$CaseNumber
+Temp$CaseNumber<-NULL
+```
+[Temp](TempMap-Cheng.html)
+```{r}
+Coast_Line<-read.csv(paste(path,"Beth_Coastline_5-3-2016.csv", sep=""))
+Coast_Line$Area<-str_trim(Coast_Line$State)
+Coast_Line$State<-NULL
+```
+[Coastline](https://en.wikipedia.org/wiki/List_of_U.S._states_by_coastline)
+
+####Bind Data Files Together for Analysis
+```{r}
+#Join engineered features to attack data
+Attacks<-left_join(Attacks, Activities, by="Case.Number")
+rm(Activities)
+Attacks<-left_join(Attacks, Species, by="Case.Number")
+rm(Species)
+Attacks<-left_join(Attacks, Temp, by="Case.Number")
+rm(Temp)
+Attacks<-left_join(Attacks, Coast_Line, by='Area')
+rm(Coast_Line)
+```
+
+###Wrangle Data
+
+####Fatal
+```{r}
+#Rename Fatal column
+Attacks$Fatal<-Attacks$Fatal..Y.N.
+Attacks$Fatal..Y.N.<-NULL
+
+#What options do we have?
+table(Attacks$Fatal)
+
+#Remove invalid options
+Attacks<-droplevels(subset(Attacks, 
+                              !Fatal %in% c("UNKNOWN")))
+
+#now, what options do we have?
+table(Attacks$Fatal)
+#Looks good!
+
+#Create additional binary response variable
+Attacks$Fatal_Binary<-as.numeric(Attacks$Fatal)
+Attacks$Fatal_Binary<-Attacks$Fatal_Binary-1
+```
+
+####Age
+```{r}
+#Convert Variable to Numeric
+Attacks$Age<-as.numeric(Attacks$Age)
+
+#Check distribution for anamalies
+hist(Attacks$Age)
+
+#That's odd, let's check the frequency table for more information.
+head(table(Attacks$Age))
+
+#It appears that there are an overabundance of one year olds getting attacked. More likely, the number 'one' was used as a placeholder value in cases where the age of the victim is unknown. Remove the number 'one' and replace with NA. 
+Attacks[which(Attacks$Age==1),]<-NA
+
+#Now things look much better. 
+hist(Attacks$Age)
+
+```
+
+####Month
+```{r}
+#Extract Month from the Date provided. 
+Attacks$Month<-format(as.Date(Attacks$Date, format="%d-%b-%Y"), format="%B")
+
+Attacks$Month_Num<-format(as.Date(Attacks$Date, format="%d-%b-%Y"), format="%m")
+```
+
+####Gender
+```{r}
+#Tidy up gender column. First lets see what options we have:
+table(Attacks$Sex)
+
+#We have some formatting issues and some invalid entries. Subset out the invalid entries. 
+Attacks<-droplevels(subset(Attacks, 
+                              !Sex %in% c("lli")))
+
+#we have some values that are blank, lets convert them to NA so they can be handled using the same processes as the other missing values. 
+Attacks[which(Attacks$Sex==""),]<-NA
+
+#Fix remaining formatting issues in variable. 
+for(i in 1:nrow(Attacks)){
+  for(n in unique(Attacks$Sex)){
+      Attacks[i,]$Sex<-ifelse(Attacks[i,]$Sex!="F", "M", "F") 
+  }
+}
+
+Attacks<-droplevels(Attacks)
+
+#Now how many options do we have?
+table(Attacks$Sex)
+```
+
+####Area
+```{r}
+#Upon looking at the unique values in the area column, we see that there is an invalid duplicate values for North Carolina and South Carolina. 
+table(Attacks$Area)
+
+#Correct invalid North Carolina and South Carolina entries. 
+Attacks$Area<-str_trim(Attacks$Area)
+
+#See that invalid entry is gone. 
+table(Attacks$Area)
+```
+
+####Address Missing Values, Level Counts, & Classes
+```{r}
+#For modeling, convert any character vectors to factors
+for(i in names(Attacks)){
+  if(class(Attacks[,i])=="character"){
+    Attacks[,i]<-as.factor(Attacks[,i])
+  }
+  if(names(Attacks[i])!="Case.Number" & length(levels(Attacks[,i]))>53){
+    print(paste("Removing [", names(Attacks[i]), "] from analysis due to high level count. Level count:", length(levels(Attacks[,i]))))
+    Attacks[,i]<-NULL
+  }
+}
+```
+
+You'll notice that Activity and Species were both dropped due to high level count. Both variables were extracted and parced for better content and then brought back in as the engineered features "activites_cat" and "species_cat". Additionally, we lost the Location variable which contained which body of water or beach the attack happened in or at. To compensate for the loss of more specific location information, the location variable was extracted and parced for content. It was then associated with a lat/long coordinate and that coordinate was tied to a water temperature from NOAA data. It was then brought back into the analysis as the engineered feature "temp". For more information, see the linked HTML files referenced in the data load section of this file. 
+
+```{r}
+#Replace all missing values with the average for the variable (if numeric) or with the most common value (if factor)
+Attacks<-na.roughfix(Attacks)
+
+#As we head into the analysis, we have some subsets of content represented:
+#Time Variables:
+Time<-c("Year", "Month")
+summary(Attacks[Time])
+
+#Location Variables:
+Loc<-c("Area", "temp", "Coastline_NOAA")
+summary(Attacks[Loc])
+
+#Victim Variables:
+Vic<-c("Sex", "Age")
+summary(Attacks[Vic])
+
+#Situational Variables:
+Sit<-c("Type", "activity_cat")
+summary(Attacks[Sit])
+
+#Shark Variables:
+Shk<-c("species_cat")
+summary(Attacks[Shk])
+```
+
+#Exploratory Analysis:
+
+##Time
+###Year
+```{r}
+#There is no apparent pattern to the number of fatal attacks per year in the United States.
+Year<-ggplot(Attacks, aes(x=Year, y=Fatal_Binary)) + geom_bar(stat="identity")
+Year
+
+#Facinating! There is a clear pattern indicating that as we have moved from the 1980s to today, the probability of a shark attack being fatal goes down.
+Year_Results<-Attacks %>% group_by(Year) %>% summarize(Probability=mean(Fatal_Binary))
+Year<-ggplot(Year_Results, aes(x=Year, y=Probability)) + geom_bar(stat="identity")
+Year
+
+#Let's see if we can validate the existance of this relationship using modeling. Indeed, we see that we have a significant and slightly negative relationship between probability of a shark attack being fatal and year. 
+ml<-lm(Probability~Year, data=Year_Results)
+
+plot(Year_Results$Year, Year_Results$Probability)
+abline(ml)
+
+summary(ml)
+```
+
+###Month
+```{r}
+#August and September have much higher fatality counts than the other months, where March and July have much lower fatality rates. Common sense suggests that you would expect more attacks in the warmer months because there would be more people in the water more often. This chart alone does not support that theory though. 
+Month<-ggplot(Attacks, aes(x=Month_Num, y=Fatal_Binary)) + geom_bar(stat="identity")
+Month
+
+#Your probability of getting killed by a shark is significantly higher in February than any other time of the year. This is an interesting and incongruous result. 
+Month_Results<-Attacks %>% group_by(Month_Num) %>% summarize(Probability=mean(Fatal_Binary))
+Month<-ggplot(Month_Results, aes(x=Month_Num, y=Probability)) + geom_bar(stat="identity")
+Month
+```
+
+##Location
+###Area
+```{r}
+#As expected, warmer states had higher fatality counts, which suggests that our theory that warm weather or warm water increase the likelihood of a fatal shark/human interaction purely because of the increased presense of humans (more people in the water more often). 
+Area<-ggplot(Attacks[which(Attacks$Fatal_Binary!=0),], aes(x=Area, y=Fatal_Binary)) + geom_bar(stat="identity") 
+Area
+
+#The results for Maryland are interesting. Though there are less instances of fatal attack, there is a higher probability of an attack being fatal. 
+Area_Results<-Attacks %>% group_by(Area) %>% summarize(Probability=mean(Fatal_Binary))
+Area<-ggplot(Area_Results[which(Area_Results$Probability!=0),], aes(x=Area, y=Probability)) + geom_bar(stat="identity")
+Area
+```
+
+###Temp
+```{r}
+#There is not a clear association between water temperatures and fatality rates. This seemse to agree with the lack of pattern in monthly data and suggest some other variable (other than water temperature and air temperature) is at play for those states that have considerably higher fatality rates.
+Temp<-ggplot(Attacks, aes(x=Fatal, y=temp)) + geom_boxplot()
+Temp
+```
+
+###Coastline
+```{r}
+#Could the higher fatality rates be due to something other than the temperature of the air or water? Let's consider access to water by looking at the Coastline variable. Disappointingly, the plot below shows a strong overlap in miles of coastline for fatal and non fatal attacks.This does not suggest we've found our silver bullet yet. 
+Coastline<-ggplot(Attacks, aes(x=Fatal, y=Coastline_NOAA)) + geom_boxplot()
+Coastline
+```
+
+##Victim
+###Sex
+```{r}
+#You are more than twice as many instances of men getting killed by a shark then women. 
+Sex<-ggplot(Attacks, aes(x=Sex, y=Fatal_Binary)) + geom_bar(stat="identity") 
+Sex 
+
+#Lets put the previous chart in context with the total number of attacks. Facinating! Though there are less than half the instances of fatal shark attacks for women compared to men, women have almost twice the probability of their shark attack being fatal then men.
+Sex_Results<-Attacks %>% group_by(Sex) %>% summarize(Probability=mean(Fatal_Binary))
+Sex<-ggplot(Sex_Results, aes(x=Sex, y=Probability)) + geom_bar(stat="identity") 
+Sex
+```
+
+###Age
+```{r}
+#Age of victim may play a role in whether or not the attack is fatal. Perhaps this has more to do with the victims ability to recover from an attack.  
+Age<-ggplot(Attacks, aes(x=Fatal, y=Age)) + geom_boxplot()
+Age
+
+#Lets look into it a bit further and see what the linear relationship between age and fatality looks like. Looks like there is a significant but small positive relationship between age and probability of fatality.
+Age_Results<-Attacks %>% group_by(Age) %>% summarize(Probability=mean(Fatal_Binary)) 
+
+ml<-lm(Probability~Age, data=Age_Results)
+
+plot(Age_Results$Age, Age_Results$Probability)
+abline(ml)
+
+summary(ml)
+```
+
+##Situation
+###Type
+```{r}
+#It is interesting that incidents catagorized as unprovoked or invalid resulted in significantly more fatalities than incidents catagorized as provoked or as sea disasters. 
+Type<-ggplot(Attacks[which(Attacks$Fatal_Binary!=0),], aes(x=Type, y=Fatal_Binary)) + geom_bar(stat="identity") 
+Type
+
+#Conversely, your chances of getting killed in a shark attack are much lower in unprovoked cases and much higher in sea disaster case. 
+Type_Results<-Attacks %>% group_by(Type) %>% summarize(Probability=mean(Fatal_Binary))
+Type<-ggplot(Type_Results[which(Type_Results$Probability!=0),], aes(x=Type, y=Probability)) + geom_bar(stat="identity") 
+Type
+```
+
+###Activities
+```{r}
+#Surfing and swimming have by far the highest instance of fatal attack of any activity. 
+Activities<-ggplot(Attacks[which(Attacks$Fatal_Binary!=0),], aes(x=activity_cat, y=Fatal_Binary)) + geom_bar(stat="identity")
+Activities
+
+#When put in context, the probability of getting fatally attacked by a shark is far higher in instances of capsize and relatively low for surfing and swimming. 
+Activities_Results<-Attacks %>% group_by(activity_cat) %>% summarize(Probability=mean(Fatal_Binary))
+Activities<-ggplot(Activities_Results[which(Activities_Results$Probability!=0),], aes(x=activity_cat, y=Probability)) + geom_bar(stat="identity") 
+Activities
+```
+
+##Shark
+```{r}
+#It seems the greater number of fatal attacks were perpetrated by the white shark. 
+Shark<-ggplot(Attacks[which(Attacks$Fatal_Binary!=0),], aes(x=species_cat, y=Fatal_Binary)) + geom_bar(stat="identity")
+Shark
+
+#But when put in context, you have a much higher probability of being killed by a blue shark or a mako shark. 
+Shark_Results<-Attacks %>% group_by(species_cat) %>% summarize(Probability=mean(Fatal_Binary))
+Shark<-ggplot(Shark_Results[which(Shark_Results$Probability!=0),], aes(x=species_cat, y=Probability)) + geom_bar(stat="identity") 
+Shark
+```
+
+
+#Final Analysis:
+
+A quick look at the random forest variable importance chart supports our findings about the relative importance of Year and Age. Interestingly, Month is listed as very important, while Sex (which had visually interesting results) is listed as not important. The variable importance plot depicts that all of the variables we chose to consider contribute in some way to predicting whether or not an attack will be fatal.
+
+```{r}
+sans<-names(Attacks) %in% c("Case.Number", "Fatal_Binary", "Month_Num", "Country")
+rf<-randomForest(Fatal~.,data=Attacks[!sans] )
+varImpPlot(rf)
+```
+
+In support of our final analysis, I wrote a function that compares the predictive power, measured in AUC, of randomForest, Decision Tree, Support Vector Machine, and Naive Bayes and returns a top model to us. This will allow us to compare different variable combinations based on how much they contribute to the over all prediction without being constrained by the limitations of the individual models. 
+
+```{r, echo=FALSE}
+#Individual Scoring Functions 
+RF_Score<-function(data, response, explanatory){
+  suppressPackageStartupMessages(library(pROC))
+  suppressPackageStartupMessages(library(hydroGOF))
+  suppressPackageStartupMessages(library(randomForest))
+  
+  set.seed(0)
+  
+  results<-NULL
+  
+  rf<-randomForest(as.factor(data[,response])~., data=data[explanatory])
+  score<-auc(data[,response], as.numeric(predict(rf)))
+  loop_results<-cbind('Model'='Random Forest', 'Response'=response, 'Explanatory'=list(explanatory), 'Score_Type'='AUC', 'Score'=score)
+    
+  results<-data.frame(rbind(loop_results, results))
+  
+  return(results)
+}
+DT_Score<-function(data, response, explanatory){
+  suppressPackageStartupMessages(library(pROC))
+  suppressPackageStartupMessages(library(hydroGOF))
+  suppressPackageStartupMessages(library(rpart))
+  
+  set.seed(0)
+  
+  results<-NULL
+  
+  dt<-rpart(as.factor(data[,response])~., data=data[explanatory])
+  score<-auc(data[,response], as.numeric(predict(dt)[,1]))
+  loop_results<-cbind('Model'='Decision Tree', 'Response'=response, 'Explanatory'=list(explanatory), 'Score_Type'='AUC', 'Score'=score)
+
+  results<-data.frame(rbind(loop_results, results))
+  
+  return(results)
+}
+NB_Score<-function(data, response, explanatory){
+  suppressPackageStartupMessages(library(pROC))
+  suppressPackageStartupMessages(library(hydroGOF))
+  suppressPackageStartupMessages(library(klaR))
+  
+  set.seed(0)
+  
+  results<-NULL
+  
+  nb<-NaiveBayes(as.factor(data[,response])~., data=data[explanatory])
+  score<-auc(data[,response], as.numeric(unlist(predict(nb)[1])))
+  loop_results<-cbind('Model'='Naive Bayes', 'Response'=response, 'Explanatory'=list(explanatory), 'Score_Type'='AUC', 'Score'=score)
+    
+  results<-data.frame(rbind(loop_results, results))
+  
+  return(results)
+}
+SV_Score<-function(data, response, explanatory){
+  suppressPackageStartupMessages(library(pROC))
+  suppressPackageStartupMessages(library(hydroGOF))
+  suppressPackageStartupMessages(library(e1071))
+  
+  set.seed(0)
+  
+  results<-NULL
+  
+  sv<-svm(as.factor(data[,response])~., data=data[explanatory])
+  score<-auc(data[,response], as.numeric(predict(sv)))
+  loop_results<-cbind('Model'='Support Vector Machine', 'Response'=response, 'Explanatory'=list(explanatory), 'Score_Type'='AUC', 'Score'=score)
+  
+  results<-data.frame(rbind(loop_results, results))
+  
+  return(results)
+}
+
+#Combined Scoring Functions
+Scoring_Results<-function(data, response, explanatory){
+  total_results<-NULL
+  top_scores<-NULL
+  
+  total_results<-data.frame(rbind(RF_Score(data, response, explanatory),  DT_Score(data, response, explanatory),  NB_Score(data, response, explanatory),  SV_Score(data, response, explanatory)))
+  
+  total_results$Score<-as.numeric(as.character(total_results$Score))
+  type<-unique(total_results$Score_Type)
+
+  total_results[order(-total_results$Score),]
+
+  return(total_results)
+}
+
+#Individual Prediction Functions
+RF_Predict<-function(data, response, explanatory){
+  rf<-randomForest(as.factor(data[,response])~., data=data[explanatory])
+  data[, paste(response,"_Pred", sep="")]<-predict(rf)
+}
+DT_Predict<-function(data, response, explanatory){
+  dt<-rpart(as.factor(data[,response])~., data=data[explanatory])  
+  data[, paste(response,"_Pred", sep="")]<-predict(dt)
+}
+NB_Predict<-function(data, response, explanatory){
+  nb<-NaiveBayes(as.factor(data[,response])~., data=data[explanatory])
+  data[, paste(response,"_Pred", sep="")]<-predict(nb)  
+}
+SV_Predict<-function(data, response, explanatory){
+  sv<-svm(as.factor(data[,response])~., data=data[explanatory])
+  data[, paste(response,"_Pred", sep="")]<-predict(sv)  
+}
+
+#Combined Prediction Functions
+Prediction_Results<-function(model, data, response, explanatory){
+  if (model=='Random Forest'){
+    results<-RF_Predict(data, response, explanatory)
+  } else if (model=='Decision Tree'){
+    results<-DT_Predict(data, response, explanatory)
+  } else if (model=='Naive Bayes'){
+    results<-NB_Predict(data, response, explanatory)
+  } else if (model=='Support Vector Machine'){
+    results<-SV_Predict(data, response, explanatory)
+  }
+  return (results)
+}
+
+#Combined Scoring and Prediction Functions
+Combined_Model_Results<-function(data, response, explanatory){
+  score_results<-Scoring_Results(data, response, explanatory)
+
+  top_results<-droplevels(score_results[which.max(score_results$Score), ])
+
+  return(top_results)
+}
+
+#Combined Scoring and Prediction Functions
+Combined_Model_Predictions<-function(data, response, explanatory){
+  score_results<-Scoring_Results(data, response, explanatory)
+
+  top_results<-droplevels(score_results[which.max(score_results$Score), ])
+
+  prediction_results<-Prediction_Results(top_results$Model, data, response, explanatory)
+  
+  return(prediction_results)
+}
+```
+
+##Full Model
+Let's see if we can't validate how much the variables together contribute to the prediction of whether or not an attack will be fatal. 
+```{r}
+Combined_Model_Results(Attacks, "Fatal_Binary", c(Time, Loc, Vic, Sit, Shk))
+```
+
+According to our full model, with an AUC score of .799, were able to predict fatality better than random chance if we consider all variables together.
+
+##Individual Models
+To put these findings in context, let's look at how the individual variable subsets contribute to the prediction. 
+```{r}
+#Time
+Combined_Model_Results(Attacks, "Fatal_Binary", Time)
+
+#Location
+Combined_Model_Results(Attacks, "Fatal_Binary", Loc)
+
+#Victim
+Combined_Model_Results(Attacks, "Fatal_Binary", Vic)
+
+#Situation
+Combined_Model_Results(Attacks, "Fatal_Binary", Sit)
+
+#Shark
+Combined_Model_Results(Attacks, "Fatal_Binary", Shk)
+```
+
+As you can see in the above results, the individual variable subsets do not out perform the full model and most do not out perform random chance, or out perform random chance by much. We do see an increased contribution from the situational variables that capture the human behavior component of our variable set.
+
+##Thoughtful Subset Models
+Maybe we can get close to the full model performance using more thoughtful subsets.
+```{r}
+#Wrong Place, Wrong Time:
+Combined_Model_Results(Attacks, "Fatal_Binary", c(Time,Loc))
+
+#Who you are and what you're doing:
+Combined_Model_Results(Attacks, "Fatal_Binary", c(Vic,Sit))
+
+#What you're doing and where you're doing it:
+Combined_Model_Results(Attacks, "Fatal_Binary", c(Loc,Sit))
+
+#Top Contributors from the Individual Runs:
+Combined_Model_Results(Attacks, "Fatal_Binary", c(Time,Loc,Sit))
+```
+
+As you can see in the results above, again we are unable to out perform the full model even by using more thoughtful subsets. We do out perform the individual models, in many cases, significantly with the highest score going to the "What you're doing and where you're doing it" model and the lowest score, barely out performing chance, going to the "Wrong place, wrong time" model.  
+
+##Conclusions
+To review, the question at the heart of our study is:
+
+What variables contribute to a shark attack being fatal?
+
+We have found that it is not only human behavior that contributes to the likelihood that a shark attack will be fatal. We have found that it is a combination of location, time, activity, the characteristics of the shark, and the characteristics of the victim that contribute to a shark attack being fatal. Activity is the most important contributor to our preditive power. Time and Location are tied for second place. Tied for least contributor are the characteristics of the shark and the characteristics of the victim. 
