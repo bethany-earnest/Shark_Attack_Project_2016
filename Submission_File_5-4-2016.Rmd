@@ -17,9 +17,9 @@ suppressPackageStartupMessages(library(hydroGOF))
 
 Bethany Earnest
 
-Ruth Cheng
+Jing-Ru (Ruth) Cheng
 
-Sam Fisher
+Samuel Fisher
 
 ###Instructions to Access Files:
 All files can be accessed through the following link: [Shark_Attack_Project_2016](https://github.com/bethany-earnest/Shark_Attack_Project_2016.git)
@@ -63,9 +63,13 @@ Some details on how each type of data was collected are captured below. Addition
 
 ###Activity:
 
+The Activity column of the shark attack data set contains free-form textual information describing what a person was doing when attacked by a shark. By analyzing these activities, we developed a discrete-valued, categorical variable to include in our attack fatality prediction model. The variable consists of single-word terms extracted and derived from activity entries. This set of terms was then used to label the attack entries.
+
 [Activity](Activity.html)
 
 ###Species:
+
+The Species column of the shark attack data set contains free-form textual information describing the shark involved in a shark attack. Analysis and extraction of terms in the species data led to the creation of a discrete-valued, categorical variable to include in our attack fatality prediction model.
 
 [Species](Species.html)
 
