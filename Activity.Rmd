@@ -537,7 +537,6 @@ activities_labeled %>% filter(!is.na(Fatal),!is.na(activity_cat)) %>%
             ,sea_disaster=round(sum(Type=="sea disaster")/freq*100,2)
             ,invalid=round(sum(Type=="invalid")/freq*100,2)
               ) %>% filter(pct_fatal>0) %>% select(-fatalities) %>% arrange(desc(pct_fatal)) %>%
-  #ggplot(aes(pct_fatal))
   kable(caption="Activity Categories ~ Type Categories")
 ```
 
@@ -549,9 +548,4 @@ attack_activitycat_type <- activities_labeled %>% filter(!is.na(Fatal),!is.na(ac
 
 attack_activitycat_type %>% filter(pct_fatal>0) %>% ggplot(aes(freq,pct_fatal,label=activity_cat)) + geom_point(size=2,color="red") +
   scale_x_log10() + geom_text_repel(cex=4.5) + facet_wrap(~ Type)
-
-
-#p <- attack_by_activity %>% filter(freq>5) %>% ggplot(aes(freq,pct_fatal, label = verbs)) + ylab("percent fatal") + #xlab("number of attacks") + ggtitle("Attack Fatalities by Activity") 
-#p + geom_point(size=2,color="red") + scale_x_log10() + #xlim() #lims(x = c(15, 900), y = c(1, 100)) + 
-#  geom_text_repel(cex=4.5)
 ```
