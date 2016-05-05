@@ -1,0 +1,557 @@
+---
+title: "Victim Activity when Shark Attacked"
+author: "Sam Fisher"
+date: "May 4, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE,fig.height=7,fig.width=10,fig.align='center', figure_counter = TRUE, fig.show='hold',dpi=72)
+options(digits=5,warn=-1)
+```
+
+```{r,echo=FALSE,warning=FALSE,message=FALSE}
+## ---- libraries
+suppressPackageStartupMessages(library(readr))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(tidyr))
+suppressPackageStartupMessages(library(stringr))
+suppressPackageStartupMessages(library(stringi))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(knitr))
+suppressPackageStartupMessages(library(RColorBrewer))
+suppressPackageStartupMessages(library(wordcloud))
+suppressPackageStartupMessages(library(ggrepel))
+suppressPackageStartupMessages(library(NLP))
+suppressPackageStartupMessages(library(SnowballC))
+```
+
+##Overview & Motivation
+The activity column of the [shark attack data set](http://www.sharkattackfile.net/incidentlog.htm) contains free-form textual information describing what a person was doing when attacked by a shark. This data holds important information necessary to understanding and predicting when a shark attack could be fatal. We were interested in seeing how the activities could be categorized and whether our categorization would impact attack fatality prediction.
+
+By analyzing the activities of victims when they were attacked, we developed a discrete-valued, categorical variable to include in our shark attack fatality prediction model. The process for creating this variable is presented in the following order: 1) Preprocessing, 2) Exploring the Activity data, 3) Wrangling the Activity data, 4) Activity Category Assignment, and 5) Activity Categories & Shark Attack Fatalities
+
+##Preprocessing
+
+####Load the Data...
+```{r}
+## ---- Load the data 
+dat <- read_csv("Shark_Attack_Data_4-7-2016.csv",col_names=TRUE,n_max=5897) #5897=last good row
+dat[24] <- NULL #remove null rows and repeated 'Case Number' rows
+dat[23] <- NULL
+dat[21] <- NULL
+dat[20] <- NULL
+
+# Rename the 'Case Number' column
+colnames(dat)[1] <- "CaseNumber"
+# Rename the 'Fatal (Y/N)' column
+colnames(dat)[13] <- "Fatal"
+```
+
+####Clean the data...
+1. Remove duplicate entries
+```{r}
+dat <- dat %>% filter(!duplicated(CaseNumber))
+```
+2. Standardize the encoding of the Activity, Type, and Fatal columns to UTF-8
+```{r}
+dat <- dat %>% 
+  mutate(Activity=iconv(Activity,from="CP1252",to="UTF-8"),
+         Type=iconv(Type,from="CP1252",to="UTF-8"),
+         Fatal=iconv(Fatal,from="CP1252",to="UTF-8"))
+```
+3. Standardize the character cases of Activity and Type columns to lower; Fatal to uppercase
+```{r}
+dat <- dat %>% 
+  mutate(Activity=stri_trans_tolower(Activity),
+         Type=stri_trans_tolower(Type),
+         Fatal=stri_trans_toupper(Fatal))
+```
+4. Remove `NA` and empty Activity entries (and create `activity_dat` data frame)
+```{r}
+activity_dat <- dat %>% select(CaseNumber,Activity,Type,Fatal) %>% filter(!is.na(Activity))
+activity_dat <- activity_dat %>% filter(nchar(Activity)>2) # filter out null/empty activities
+```
+5. Remove punctuation from Activity entries
+```{r}
+activity_dat <- activity_dat %>% 
+  mutate(Activity=str_trim(gsub("[\\.\\s\"'`\\?\\(\\),;:-]+"," ",Activity,perl=TRUE)),
+         Activity=gsub("[\\s]+"," ",Activity,perl=TRUE),
+         Activity=gsub("( \\/ )"," or ",Activity,perl=TRUE))
+```
+
+##Exploring the Activity data
+
+Exploring the data entails general inspection for patterns and associations: clear patterns, noisy patterns, patterns to maintain, patterns to merge, patterns to split, and patterns to get rid of. Several initial questions guided this exploration, and during the process, more questions emerged. Exploration helped inform how much cleaning and wrangling of the data was necessary while also focusing the analysis and results.
+
+####How are activities described?
+
+Activities are described with free-form text. This raises general questions about how consistent and standardly formed the entries are.
+
+* How much variation exists across Activity entries?
+* What is the distribution of word counts for Activity entries?
+* How consistent is the vocabulary use?
+
+####How many distinct Activity entries?
+There are ``r n_distinct(activity_dat$Activity)`` distinct entries in the Activity data -- too many to use as individual categories in the activity variable that we seek.
+
+####What is the distribution of word counts per entry over all entries? 
+```{r}
+activity_word_count <- activity_dat %>% 
+  mutate(num_words=
+           # http://stackoverflow.com/questions/8920145/count-the-number-of-words-in-a-string-in-r
+           sapply(gregexpr("[[:alpha:]]+", Activity), function(x) sum(x > 0))
+         ) %>%
+  select(num_words,Activity)
+
+summary(activity_word_count$num_words)
+```
+On average, an Activity entry contains `r round(mean(activity_word_count$num_words),2)` words. The median is `r median(activity_word_count$num_words)` word, and the most wordy entry contains `r max(activity_word_count$num_words)` words. This is illustrated in the following histogram.
+
+```{r,echo=FALSE,fig.height=4}
+hist(activity_word_count$num_words, 
+     breaks=20, col="lightblue",
+     #freq=FALSE,
+     main="Word Count Distribution\nper Activity entry", xlab="number of words in an entry",
+     ylab = "frequency of word count")
+```
+These are a few Activity entries demonstrating the word count variation: 
+```{r,echo=FALSE,fig.show='hold'}
+c(activity_word_count$Activity[which(activity_word_count$num_words==1)[2]],
+      activity_word_count$Activity[which(activity_word_count$num_words==2)[2]],
+      activity_word_count$Activity[which(activity_word_count$num_words==3)[1]],
+      activity_word_count$Activity[which(activity_word_count$num_words>4)[sample(1:20,1)]],
+      activity_word_count$Activity[which(activity_word_count$num_words>8)[1]],
+  activity_word_count$Activity[which(activity_word_count$num_words>15)[1]]
+  )
+```
+
+####What does the vocabulary used to describe an Activity look like?
+
+First, let's get all of the words contained in every Activity entry.
+```{r}
+all_words_text <- paste(unlist(activity_dat$Activity),collapse=" ") 
+#all_words_text <- gsub(" NA "," ",all_verbs_text)
+all_words <- str_split(all_words_text," ")[[1L]]
+```
+`r n_distinct(all_words)` words are used in describing all of the Activity entries. Here are the top 10 and their frequencies.
+
+```{r}
+all_words_freqs <- as.data.frame(table(w=all_words)) %>% arrange(desc(Freq))
+top_ten_counts <- all_words_freqs %>% head(10)
+top_ten_counts %>% select(word=w,Freq)
+```
+Only half of the top 10 most frequent words describe an activity. More cleaning and standardization is needed before we can isolate the words that characterize an activity. To get an idea of the sea of words into which we're about to swim, here is a visualization:
+```{r,echo=FALSE}
+wordcloud(all_words_freqs$w,log(all_words_freqs$Freq),
+          min.freq = 2.7
+          ,scale=c(2,.005)
+          #,rot.per = .04
+          ,random.order=FALSE
+          ,color=brewer.pal(9,"Blues")
+          )
+```
+
+####Vocabulary Characteristics at a Glance
+
+The vocabulary consists of words common in free-form text. In addition to seeing a few activity-describing verbs, there are nouns, pronouns, conjunctions, prepositions, articles, and count words among others. To derive a reasonably small, discrete set of categories from these, we need to narrow down the vocabulary to just those terms characterizing the activities in the data.
+
+We also desire the activity categories to be English-interpretable. Each one should be labeled with text that can be easily mapped to its more normal form. A category label needs to retain much of the same form as the words that together give it its distributional usage characteristics.
+
+##Wrangling the Activity Data
+Exploration of the activity data motivates several more text wrangling steps:
+
+* Standardization of activity terms
+* Part-of-speech tagging
+* Lemmatization (without WordNet)
+* Stop word removal
+* Stemming
+* Removing non-activity terms
+
+####Standardizing Activity Terms
+
+The Activity data contains information (text) describing what a person was doing when s/he was attacked by a shark. These texts contain many irregularities. Spacing and hyphenation sometimes occurs in the spelling of terms that are otherwise the same. We can refer to such terms as multi-token terms. Also, to create activity categories, activities that are much the same - but which are described by different terms - need to changed to the same form. This is accomplished using regular expressions.
+
+After analyzing the data further, the following synonyms are created.
+
+* boogieboard ~ body boarding + wake boarding + boogie boarding
+* windboard ~ wind boarding + kite surfing/boarding + sail boarding
+* kayak ~ kayaking + canoing/ed + surf skiing + paddle skiing
+* freediv ~ free diving + skin diving + hookah diving
+* waterski ~ water skiiing + kneeboarding
+
+Care has also been given to not modify the suffixes of these terms, such as `-ing` and `-ed`. 
+
+```{r,tidy=TRUE}
+## ---- Standardize certain activity names
+activity_dat <- activity_dat %>% 
+         mutate(
+        # This mutation creates LESS activity variation (more factors) by 
+        # separating modifier terms from activity terms
+        Activity=gsub("([a-z])(div|ski|surf|board|fish|kayak|cano|paddl)(ing)","\\1 \\2\\3",Activity,perl=TRUE),
+        
+         # This mutation creates GREATER activity variation of activity by concatenating
+        #Activity=gsub("([a-z]) (div|ski|surf|board|fish)(ing)","\\1\\2\\3",Activity,perl=TRUE),
+        
+        #bodysurfing: riding a wave without the assistance of any buoyant devic
+        Activity=gsub("(body)[\\s-]?(surf)","bodysurf",Activity,perl=TRUE),
+        
+        #bodyboarding, boogieboarding, and wakeboarding are equivalent activities
+        Activity=gsub("(body|wake|boogie)[\\s-]?(board)","boogieboard",Activity,perl=TRUE),
+        
+        #spearfishing and spear fishing -- spearfishing is similar to freediving except that it carries the intention of blood being spilt in the water. And blood attracks sharks.
+        Activity=gsub("(spear)[\\s-](fish)","\\1fish",Activity,perl=TRUE),
+        
+        #treat windsurfing, kitesurfing, and sailboarding the same.
+        Activity=gsub("(wind|kite|sail)[\\s-](board|surf)","windboard",Activity,perl=TRUE),
+        
+        #paddle boarding
+        Activity=gsub("(paddle)[\\s-](board)","paddleboard",Activity,perl=TRUE),
+        
+        #treat kayaking, canoeing, surfskiing, paddleskiing
+        Activity=gsub("(kayak|canoe|surf[\\s-]?ski|paddle[\\s-]?ski)","kayak",Activity,perl=TRUE),
+        
+        #water skiing (and knee-boarding?)
+        Activity=gsub("(water)[\\s-](ski)","waterski",Activity,perl=TRUE),
+        Activity=gsub("(knee)[\\s-](board)","waterski",Activity,perl=TRUE),
+        
+        #boogie/skim boarding
+        #Activity=gsub("(boogie|skim)[\\s-](board)","boogieboard",Activity,perl=TRUE),
+        
+        #perform compounding on 'over board'
+        Activity=gsub("(over|ove)[\\s-](board)","overboard",Activity,perl=TRUE),
+        
+        #perform compounding on 'free|hookah diving'
+        Activity=gsub("(hookah|free)[\\s-](div)","\\1div",Activity,perl=TRUE),
+        
+        #perform compounding on 'scuba diving'
+        Activity=gsub("(scuba)[\\s-](div)","\\1div",Activity,perl=TRUE)
+        )
+```
+After standardizing activity terms, notice that the counts for the top 5 most occurring words have changed a bit. `diving` was especially impacted, having been subcategorized by 40%.
+```{r,echo=FALSE}
+all_words_text <- paste(unlist(activity_dat$Activity),collapse=" ") 
+#all_words_text <- gsub(" NA "," ",all_verbs_text)
+all_words <- str_split(all_words_text," ")[[1L]]
+all_words_freqs <- as.data.frame(table(w=all_words)) %>% arrange(desc(Freq))
+#all_words_freqs %>% head(10)
+left_join(top_ten_counts,head(all_words_freqs,10),by="w") %>%
+  select(word=w,old_count=Freq.x,new_count=Freq.y)
+```
+
+####Part-of-Speech Tagging
+
+Removing stop words seems like an obvious next step, but hold that thought. Assuming that words representative of activities tend to be verbs, we might want to identify the verbs in the data first. Part-of-speech (PoS) tagging accomplishes this. And the PoS tagger relies in part on the presence of stop words when assigning its tags.
+
+Let's set up the `pos_tagger` function. 
+```{r,warning=FALSE,message=FALSE}
+require(NLP)
+library(openNLP)
+library(openNLPmodels.en)
+
+sent_token_annotator <- openNLP::Maxent_Sent_Token_Annotator(language = "en")
+word_token_annotator <- openNLP::Maxent_Word_Token_Annotator()
+pos_tag_annotator <- openNLP::Maxent_POS_Tag_Annotator(probs = FALSE)
+  
+pos_tagger <- function(x){
+  ## Modified code from http://www.martinschweinberger.de/blog/part-of-speech-tagging-with-r/
+  
+  y1 <- NLP::annotate(x, list(sent_token_annotator, word_token_annotator))
+  y2 <- NLP::annotate(x, pos_tag_annotator, y1)
+#  y3 <- annotate(x, Maxent_POS_Tag_Annotator(probs = TRUE), y1)
+  y2w <- subset(y2, type == "word")
+  tags <- sapply(y2w$features, '[[', "POS")
+  r1 <- sprintf("%s/%s", x[y2w], tags)
+  r2 <- paste(r1, collapse = " ")
+  r2 <- gsub("\\/","_",r2)
+  return(r2)  } 
+```
+And tag the activity entries.
+```{r,warning=FALSE,message=FALSE}
+## Extract/format all activities as String class so NLP can be used.
+acts_all <-  lapply(activity_dat$Activity,function(x){ x <- as.String(x)})
+## Tag all activities for parts-of-speech (POS)
+acts_tagged <- lapply(acts_all,FUN=pos_tagger)
+rm(acts_all) # remove acts_all to save space
+## add the tagged column to the activity data
+activity_dat2 <- cbind(activity_dat,tagged=as.character(acts_tagged))
+rm(acts_tagged)
+activity_dat2 %>% select(Activity,tagged) %>% head(5) %>% kable(caption="PoS Tagged Output")
+```
+
+####Extract Activity Words
+
+Now we extract activity words from the PoS tagged entries, and remove the PoS tags from those extractions. These are stored in a new variable called `verbs_dat`. 
+
+Extraction patterns consist of:
+
+* words tagged as verbs: `VB, VBD, VBG, VBZ, and VBN`
+* words ending in `-ing` (erroneously) tagged `NN`
+* the word `overboard`
+
+```{r}
+## ---- Activity extraction functions --
+extractAllFlat <- function(x,ptn){
+  # call from within lapply when using mutate
+  extracts <- str_extract_all(x,ptn)
+  return(paste(unlist(extracts),collapse=" "))
+}
+
+require(SnowballC)
+stemGivenWords <- function(w){
+  # call from within lapply when using mutate
+  t <- unlist(str_split(w," "))
+  stems <- wordStem(t,language = "english")
+  return(paste(unlist(stems),collapse=" "))
+}
+
+replaceIrregVerbForms <- function(w){
+  w <- gsub("(^|[\\s])(s)([\\s]|$)"," ",w, perl=TRUE)
+  w <- gsub("(^|[\\s])(fell)([\\s]|$)"," fall ",w, perl=TRUE)
+  w <- gsub("(^|[\\s])(sank|sunk)([\\s]|$)"," sink ",w, perl=TRUE)
+  w <- gsub("(^|[\\s])(swam|swum)($|[\\s])"," swim ",w, perl=TRUE)
+  w <- gsub("(^|[\\s])(stood)($|[\\s])"," stand ",w, perl=TRUE)
+  w <- gsub("(^|[\\s])(saw)($|[\\s])"," see ",w, perl=TRUE)
+  w <- str_trim(w)
+  
+  if(nchar(w)<2){
+    return(NA)
+  }
+  return(w)
+}
+
+removeModalVerbs <- function(w){
+  w <- gsub("(^|[\\s])(attempt|torpedo|founder|use|hold|cling|attack|drown|go|going|gone|went|was|is|been|being|be|becam|began|believ|see|were|do|doing|did|does|had|have|swamp|will)([\\s]|$)"," ",w, perl=TRUE)
+  return(w)
+}
+```
+
+```{r}
+# Extract activity words as verbs, nouns that end in -ing, and "overboard".
+verbs_dat <- activity_dat2 %>% 
+  mutate(verbs=tagged,
+         verbs=gsub("([a-z]+ing)(_NN)","\\1_VBG",verbs,perl=TRUE),
+         verbs=sapply(verbs,FUN=extractAllFlat,ptn="\\b([a-z]+_VB[DGZN]?|overboard_RB)\\b"),
+         verbs=gsub("(_[A-Z]+[\\s]?)"," ",verbs,perl=TRUE) # REMOVE POS TAGS
+         )
+```
+
+```{r}
+verbs_dat %>% select(Activity,verbs,tagged) %>% head(10) %>% kable
+```
+
+####Stem and Clean
+
+Next we'll stem and clean the activity words (i.e. the verbs column).
+```{r}
+## ---- Stem and clean
+verbs_dat <- verbs_dat %>% 
+  mutate(verbs=sapply(verbs,FUN=stemGivenWords), # stem
+         verbs=sapply(verbs,FUN=replaceIrregVerbForms), # replace irregular verb forms with base form
+         verbs=sapply(verbs,FUN=removeModalVerbs), # remove modal verbs and others non-content words
+         verbs=ifelse(nchar(verbs)<2,NA,verbs),
+         Fatal=ifelse(Fatal=="UNKNOWN",NA,ifelse(Fatal=="F","Y",Fatal))
+         
+         ) %>% select(verbs,Type,Fatal)
+
+## ---- Alphabetically sort multi-word vectors
+verbs_dat <- verbs_dat %>% #filter(!is.na(verbs)) %>% 
+  mutate(verbs=sapply(verbs,function(x){
+    if(!grepl(" ",x)){
+      return(x)
+    }
+    
+    x <- str_trim(paste(sort(str_split(x," ")[[1]]),collapse=" "))
+    return(x)
+  })
+    )
+```
+
+####Inspect the remaining activity words
+After tagging, stemming and cleaning, here's a peek at what we're left with.
+```{r}
+all_verbs_text <- paste(unlist(verbs_dat$verbs),collapse=" ") 
+all_verbs_text <- gsub(" NA "," ",all_verbs_text)
+all_verbs <- str_split(all_verbs_text," ")[[1L]]
+
+all_verb_freqs <- as.data.frame(table(v=all_verbs)) %>% arrange(desc(Freq))
+  
+wordcloud(all_verb_freqs$v,all_verb_freqs$Freq,
+          min.freq = 2,scale=c(4,1),
+          random.order=FALSE, 
+          colors=brewer.pal(8, "Dark2"))
+```
+
+Top 10 Words   |   Bottom 10 Words
+------------   |   ---------------
+`r head(all_verb_freqs$v,10)`  |  `r tail(all_verb_freqs$v,10)`
+
+Unfortunately, there are still `r n_distinct(verbs_dat$verbs[!is.na(verbs_dat$verbs)])` activity categories. This is because many categories still combine to form multi-word categories. In fact, `r n_distinct(verbs_dat$verbs[!is.na(verbs_dat$verbs) & grepl(" ",verbs_dat$verbs)])` of the categories consist of more than one word. 
+
+```{r}
+verbs_dat %>% filter(grepl(" ",verbs)) %>% count(verbs) %>% arrange(desc(n))
+```
+
+This might be acceptable if the model were set up to take individual words as separate feature variables, but it is not. Dropping all of the single-word categories that are also contained in a multi-word category is another approach, but one not taken here. Given that the median number of words per activity entry is just one word, the approach taken is to resolve multi-word categories to single-word categories.
+
+We also want to limit the set of categories to those that are most relevant. To do this, we'll set a low frequency cut-off parameter, and only select categories with frequencies above that cut-off.
+
+```{r}
+freq_cutoff <- 11
+```
+
+Visualizing words whose frequencies are above the cut-off threshold provides an indication of a) how well-formed the activity words have become as we've widdled them down, and b) what the set of activity category values will become.
+```{r,fig.height=8,fig.width=10,echo=FALSE}
+all_verb_freqs$v <- as.character(all_verb_freqs$v)
+all_verb_freqs <- all_verb_freqs %>% filter(!is.na(v),nchar(v)>2)
+# This is repeated below. need to do only once...
+p <- cbind(r=seq(1,nrow(all_verb_freqs)),all_verb_freqs) %>% filter(Freq>freq_cutoff) %>% ggplot(aes(r,Freq, label = v)) + 
+  ylab("frequency of mention") + xlab("rank") + ggtitle("Shark Attack-related Activities (stemmed)") 
+p + scale_y_log10() + scale_x_continuous() + geom_point(size=2,color="red") + 
+  geom_text_repel(cex=4.5)
+```
+Of these high frequency words, notice each is repesented by a single term in its stemmed form. And as expected, `swim`, `surf`, and `fish` (-ing) are the most frequently used activity words. But as shown above, multi-word categories still exist in the data. If not resolved, they will leave `NA` values in those entries. This is dealt with in the next section where activity labels are assigned.
+
+##Activity Category Assignment
+
+We know the most frequent activity-characterizing words. These will serve as a lookup table when assigning categories to activity entries.
+
+```{r}
+vFreqs <- all_verb_freqs %>% 
+  subset(Freq>freq_cutoff) %>% data.frame() %>%
+  arrange(desc(Freq))
+vFreqs
+```
+
+Let's now think of these words as factors for the activity variable of our prediction model. First, we need to set up the function `assign_label`. 
+
+```{r}
+## ---- Assign Label Function
+assign_label <- function(x){
+  
+  # return NA if input is empty string  
+  if(nchar(x)<1){
+    return(NA)
+  }
+    toks <- str_split(x," ")[[1]]
+    toks <- toks[toks%in%vFreqs$v]
+    #toks <- vFreqs %>% filter(v%in%toks) %>% select(v)[[1]]
+    
+  # return NA if empty vector was produced  
+  if(length(toks)<1){
+    return(NA)
+  }
+    # Discount 'swim' (by removal) if other activities are mentioned
+    if(length(toks)>1 & c("swim")%in%toks){
+      #remove swim if there are other activities mentioned
+      toks <- !toks%in%c("swim")
+    }
+    
+    # Choose the one activity word that is most frequent among those in the Activity entry
+    tok <- vFreqs %>% filter(v%in%toks) %>% arrange(desc(Freq)) #arrange(desc(Freq))
+    #tok <- tok[which(max(tok$Freq))]
+    return(paste(tok[1,1],sep=""))
+}
+```
+
+The `assign_label` function chooses one activity word to represent an activity entry and assigns it to the entry. It does so by matching an entry's words with words in the `vFreqs` table of category frequencies (i.e. the lookup table).
+
+If an entry contains only one word, and that word exists in the lookup table, then that word gets to be the category for that entry. If the word is not in the lookup table, then `NA` is assigned to that entry.
+
+If multiple words are contained in an entry, then words not in the lookup table are removed. Among those remaining, if `swim` is among them, then it is removed (i.e. discounting swim). Finally the word in the entry with the highest frequency in the lookup table is assigned to the entry.
+
+Now let's perform the category/label assignments...
+
+```{r}
+## ---- Asssign the category labels
+activities_labeled <- verbs_dat %>% 
+  mutate(activity_cat=sapply(verbs,FUN=assign_label),
+         activity_cat=ifelse(activity_cat=="NA",NA,activity_cat)) %>% 
+         #,activity_cat=as.factor(activity_cat)) %>% 
+  select(activity_cat,Type,Fatal)
+
+activities_labeled <- cbind(activities_labeled,CaseNumber=activity_dat$CaseNumber)
+```
+What percent of incidents are not covered by any of the categories?
+```{r}
+pct_attacks_not_labeled <- round(sum(is.na(activities_labeled$activity_cat))/nrow(activities_labeled),2)*100
+```
+`r pct_attacks_not_labeled`% of reported attacks are not covered by the `r n_distinct(activities_labeled$activity_cat[!is.na(activities_labeled$activity_cat)])` distinct activity classes. Here are the 10 categories with greatest coverage (including `NA`).
+```{r,fig.width=4}
+## Category Coverage
+activities_labeled %>% group_by(activity_cat) %>% 
+  summarize(pct=n()/nrow(activities_labeled)*100) %>% select(activity_cat,pct) %>%
+  arrange(desc(pct),activity_cat) %>% select(activity_cat,coverage=pct)
+```
+And visualized as a wordcloud:
+```{r}
+wordcloud(vFreqs$v,vFreqs$Freq,
+          min.freq = 8
+          ,scale= c(4,1)
+          ,random.order=FALSE
+          ,colors=brewer.pal(8, "Dark2"))
+```
+
+Finally, let's write the category assignments out to file so the can be included in the shark attack fatality prediction model.
+```{r,eval=FALSE}
+## ---- Write labeled activities to csv file
+activities_labeled %>% select(CaseNumber,activity_cat) %>% 
+  write.csv("activities_labeled.csv", row.names = FALSE, quote = FALSE)
+```
+
+##Activity Categories & Shark Attack Fatalities
+
+When associated with attack fatalities, the categories appear to make sense.
+```{r}
+attack_by_activity <- activities_labeled %>% filter(!is.na(Fatal),!is.na(activity_cat)) %>% 
+  group_by(activity_cat) %>% 
+  summarize(freq=n(),fatalities=sum(as.numeric(Fatal=="Y")),pct_fatal=round(fatalities/freq*100,2)) %>% 
+  arrange(desc(freq))
+## Unique activity counts where fatality outcome is known
+attack_by_activity %>% head(20)
+
+p <- attack_by_activity %>% filter(freq>5) %>% ggplot(aes(freq,pct_fatal, label = activity_cat)) + ylab("percent fatal") + xlab("number of attacks") + ggtitle("Fatal Attacks by Activity") 
+p + geom_point(size=2,color="red") + scale_x_log10() + 
+  geom_text_repel(cex=4.5)
+```
+
+As anyone should assume, swimming is involved when a fatal shark attack occurs. It is a given, and the word we give to that activity characterizes being more or less deep in the water -- where a shark might attack. In the above plot, notice that `swim` is the most reported activity involving shark attacks, and 42% fatal after discounting during label assignment -- or about half of the maximum of percent fatal attacks. This provides a good point of reference relative to the groupings of other activities involved in shark attack fatalities.
+
+The most apparent grouping in the above plot includes capsizing, sinking, falling and/or being washed  overboard. All of those categories have a shark attack fatality over 70%.
+
+##Addendum
+
+####Activity Categories & the existing Type Variable
+
+The shark attack data set already contains a feature variable called **Type**, which splits attack victim activities into five (5) general values: Boating, Invalid, Provoked, Unprovoked, and Sea Disaster. These are very coarse-grained categories describing the activity data. To better understand the 41 activity categories created earlier, it may be interesting to see how they associate with the Type values.
+
+Comparing our finer-grained activity categories with the Type categories provided in the data can help us understand better how our categories improve upon the Type categories in terms of shark attack fatality.
+
+```{r}
+activities_labeled %>% filter(!is.na(Fatal),!is.na(activity_cat)) %>% 
+  group_by(activity_cat) %>% 
+  summarize(freq=n(),fatalities=sum(as.numeric(Fatal=="Y")),pct_fatal=round(fatalities/freq*100,2)
+            ,provoked=round(sum(Type=="provoked")/freq*100,2)
+            ,unprovoked=round(sum(Type=="unprovoked")/freq*100,2)
+            ,boating=round(sum(Type=="boating")/freq*100,2)
+            ,sea_disaster=round(sum(Type=="sea disaster")/freq*100,2)
+            ,invalid=round(sum(Type=="invalid")/freq*100,2)
+              ) %>% filter(pct_fatal>0) %>% select(-fatalities) %>% arrange(desc(pct_fatal)) %>%
+  #ggplot(aes(pct_fatal))
+  kable(caption="Activity Categories ~ Type Categories")
+```
+
+
+```{r}
+attack_activitycat_type <- activities_labeled %>% filter(!is.na(Fatal),!is.na(activity_cat)) %>% 
+  group_by(activity_cat,Type) %>% 
+  summarize(freq=n(),fatalities=sum(as.numeric(Fatal=="Y")),pct_fatal=round(fatalities/freq*100,2))
+
+attack_activitycat_type %>% filter(pct_fatal>0) %>% ggplot(aes(freq,pct_fatal,label=activity_cat)) + geom_point(size=2,color="red") +
+  scale_x_log10() + geom_text_repel(cex=4.5) + facet_wrap(~ Type)
+
+
+#p <- attack_by_activity %>% filter(freq>5) %>% ggplot(aes(freq,pct_fatal, label = verbs)) + ylab("percent fatal") + #xlab("number of attacks") + ggtitle("Attack Fatalities by Activity") 
+#p + geom_point(size=2,color="red") + scale_x_log10() + #xlim() #lims(x = c(15, 900), y = c(1, 100)) + 
+#  geom_text_repel(cex=4.5)
+```
