@@ -1,0 +1,392 @@
+---
+title: "Shark Attack Data Analytics: Exploration on Environment Variables"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The influence of environmental variables on the presence of white sharks can be found from the article, http://www.ncbi.nlm.nih.gov/pmc/articles/PMC3712984/.  White sharks have been implicated in 346 unprovoked attacks on humans worldwide, of which 102 were fatal since 1839, with a steady increase in the frequency of attacks.
+
+This project targets all the attacks by different species of sharks.  The main goal of the data exploration is to retrieve sea surface temperature (SST) from the NOAA web site, which hosts 36 files storing data from 1981 to 2016.  Each file (~450 MB) stores daily mean SST each year.  The stark attack dataset provides the attack location, area, and country, which are used for the conversion to (latitude, longitude) coordinate via google API.  Some locations were not recorded correctly or accurately, so manual correction was required.  Via visualizing the attack locations marked on the map, we can further clean erroneous data points.  The temperature (SST) is one of explanatory variables in the shark attack data analytics.
+
+## Data set
+
+The following data sets are provided to analyze Shark Attack.
+
+```{r}
+# http://www.huffingtonpost.com/norm-schriever/coming-down-from-shark-we_b_3740495.html
+suppressMessages(library(readr))
+suppressMessages(library(tidyr))
+suppressMessages(library(plyr))
+suppressMessages(library(dplyr))
+suppressMessages(library(ggplot2))
+suppressMessages(library(lubridate))
+# attack location, how many people in the area, water realted env variables, date, time
+SAdata <- read_csv("Shark_Attack_Data_4-7-2016.csv",col_names=TRUE,n_max=5897)
+```
+
+## Analyze area, location, and country
+
+Note that "Unprovoked attacks" are defined as incidents where an attack on a live human occurs in the shark’s natural habitat with no human provocation of the shark.  No matter the incident was provoked or unprovoked, there were more than 2000 cases occurred in USA. The section of R code is as follows for country ranking of shark attacks. 
+
+```{r}
+SA_tab <- tbl_df(SAdata[1:19]) 
+colnames(SA_tab)[1] <- "CaseNumber"
+SA_tab %>% select(CaseNumber,Date,Year,Location,Area,Country) %>% 
+  group_by(Location,Area,Country) %>% dplyr::summarize(n=n()) %>% 
+  filter(is.na(Area)) %>% View()
+SA_tab %>% group_by(Country) %>% select(CaseNumber,Date,Year,Area) %>%
+  dplyr::summarize(n=n()) %>% arrange(desc(n))
+```
+
+## Visualization of shark attack locations
+
+The world map and the US map are required in order to show the locations of shark attacks.  Map tools were explored and selected for the study.
+
+### Loading map tools
+
+```{r worldmap, echo=FALSE}
+suppressMessages(library("ggmap"))
+suppressMessages(library(maptools))
+suppressMessages(library(maps))
+# A test case
+# visited <- c("SFO", "Chennai", "London", "Melbourne")
+# ll.visited <- geocode(visited)
+# visit.x <- ll.visited$lon
+# visit.y <- ll.visited$lat
+#USING MAPS
+# map("world", fill=TRUE, col="white", bg="lightblue", ylim=c(-60, 90), mar=c(0,0,0,0))
+# points(visit.x,visit.y, col="red", pch=16)
+```
+
+A section of geocoding code to retrieve (lat,lon) coordinates using Google API.
+
+```{r geocoding}
+#### This script uses RCurl and RJSONIO to download data from Google's API:
+#### Latitude, longitude, location type (see explanation at the end), formatted address
+#### Notice ther is a limit of 2,500 calls per day
+suppressMessages(library(bitops)) 
+suppressMessages(library(RCurl))
+suppressMessages(library(RJSONIO))
+ 
+url <- function(address, return.call = "json", sensor = "false") {
+ root <- "http://maps.google.com/maps/api/geocode/"
+ u <- paste(root, return.call, "?address=", address, "&sensor=", sensor, sep = "")
+ return(URLencode(u))
+}
+ 
+geoCode <- function(address,verbose=FALSE) {
+ if(verbose) cat(address,"\n")
+ u <- url(address)
+ doc <- getURL(u)
+ x <- fromJSON(doc,simplify = FALSE)
+ if(x$status=="OK") {
+ lat <- x$results[[1]]$geometry$location$lat
+ lng <- x$results[[1]]$geometry$location$lng
+ location_type <- x$results[[1]]$geometry$location_type
+ formatted_address <- x$results[[1]]$formatted_address
+ return(c(lat, lng, location_type, formatted_address))
+ } else {
+ return(c(NA,NA,NA, NA))
+ }
+}
+```
+
+```{r, echo=FALSE}
+##Test with a single address
+#address <- geoCode("The White House, Washington, DC")
+#address
+#[1] "38.8976831"  lat
+#[2] "-77.0364972" lon
+#[3] "APPROXIMATE"
+#[4] "The White House, 1600 Pennsylvania Avenue Northwest, Washington, D.C., DC 20500, USA"
+ 
+# Use plyr to getgeocoding for a vector
+#address <- c("The White House, Washington, DC","The Capitol, Washington, DC")
+#locations <- ldply(address, function(x) geoCode(x))
+#names(locations) <- c("lat","lon","location_type", "forAddress")
+
+#map("world", fill=TRUE, col="white", bg="lightblue", 
+#    ylim=c(-60, 90), mar=c(0,0,0,0))
+#points(as.numeric(locations$lon),as.numeric(locations$lat), 
+#       col="red", pch=16)
+ 
+#Location type, for more info check here: https://developers.google.com/maps/documentation/directions/
+#"ROOFTOP" indicates that the returned result is a precise geocode for which we have location information accurate down to street address precision.
+#RANGE_INTERPOLATED" indicates that the returned result reflects an approximation (usually on a road) interpolated between two precise points (such as intersections). Interpolated results are generally returned when rooftop geocodes are unavailable for a street address.
+#GEOMETRIC_CENTER" indicates that the returned result is the geometric center of a result such as a polyline (for example, a street) or polygon (region).
+#APPROXIMATE" indicates that the returned result is approximate.
+```
+
+### Worldside shark attacks
+The google API has the limitation of 2500 queries per day.  Therefore, the queries were run three times on three machines.  Three files (.rds) were created to save the results, and then read back to a data frame.  Manual corrections were performed for inaccurate or incorrect location inputs.  The correction was only made for USA, which is the country selected for data analysis.  Obviously there are more corrections needed for other countries based on the world attack map.
+
+```{r}
+world_tab <- SA_tab %>% select(CaseNumber,Location,Area,Country,Date) %>% na.omit()
+address <- do.call(paste, c(select(world_tab,-c(CaseNumber,Date)), sep=" ")) %>%
+              iconv(from="CP1252",to="UTF-8")
+
+# run and then save the result---there are 2500 queries limitation per day
+#infile <- "world_lon-lat_SAdata-5033to5217.rds"
+#locations <- sapply(address[5033:5217],geocode)
+#saveRDS(locations, infile)
+
+# read in (lon,lat) from three .rds files
+infile <- "world_lon-lat_SAdata-1to2532.rds"
+read_loc <- t(readRDS(infile))
+read_df <- data.frame(world_tab$CaseNumber,matrix(unlist(read_loc),
+                                                  nrow=dim(read_loc)[1]))
+names(read_df) <- c("CaseNumber","lon","lat")
+
+infile <- "world_lon-lat_SAdata-2533to5032.rds"
+read_loc <- t(readRDS(infile))
+read_df[2533:5217,2:3] <-data.frame(matrix(unlist(read_loc),nrow=dim(read_loc)[1]))
+
+infile <- "world_lon-lat_SAdata-5033to5217.rds"
+read_loc <- t(readRDS(infile))
+read_df[5033:5217,2:3] <-data.frame(matrix(unlist(read_loc),nrow=dim(read_loc)[1]))
+
+# Fixed the following locations manually
+Inland <- SA_tab %>% filter(Area=="Guam")
+read_df[which(read_df$CaseNumber==Inland$CaseNumber),2:3] <- c(144.76,13.48)
+# one incident inland is Albuquerque aquarium, Albuquerque, NM
+# 6 incidents inland are California, CA
+# one incident occurred in Destin, Okaloosa County, FL
+Inland <- SA_tab[grep("Destin",SA_tab$Location),]
+read_df[which(read_df$CaseNumber %in% Inland$CaseNumber)[1],2:3] <- c(-86.5,30.39)
+# one incident in 15 miles south of Jones Inlet, which is actually in Long Island
+Inland <- SA_tab[grep("Jones Inlet",SA_tab$Location),]
+read_df$lon[which(read_df$CaseNumber%in%Inland$CaseNumber)] <- -73.13
+read_df$lat[which(read_df$CaseNumber%in%Inland$CaseNumber)] <- 40.79
+# one incident in Sandbridge beach, VA
+Inland <- SA_tab[grep("Sandbridge Beach",SA_tab$Location),]
+read_df[which(read_df$CaseNumber==Inland$CaseNumber),2:3] <- c(-75.94,36.72)
+# one incident in Gun Beach, Guam
+Inland <- SA_tab[grep("Gun Beach",SA_tab$Location),]
+read_df[which(read_df$CaseNumber==Inland$CaseNumber),2:3] <- c(144.8,13.52)
+# one incident in Short sand beach
+Inland <- SA_tab[grep("Short Sand Beach",SA_tab$Location),]
+read_df[which(read_df$CaseNumber==Inland$CaseNumber),2:3] <- c(-123.87,45.76)
+# one incident in Catalina Island, CA
+Inland <- SA_tab[grep("West Cove, Catalina Island",SA_tab$Location),]
+read_df[which(read_df$CaseNumber==Inland$CaseNumber),2:3] <- c(-118.42,33.39)
+# one incident in 24 km off Santa Catalina Island in the Channel Islands
+Inland <- SA_tab[grep("24 km off Santa Catalina Island",
+                      SA_tab$Location),]
+read_df[which(read_df$CaseNumber==Inland$CaseNumber),2:3] <-
+  c(-118.42,33.3833)
+# one incident in Hanalei Bay, FL actually in St. George Island
+Inland <- SA_tab[grep("Hanalei Bay",
+                      SA_tab$Location),] %>% filter(Area=="Florida")
+read_df[which(read_df$CaseNumber==Inland$CaseNumber),2:3] <-
+  c(-84.88,29.66)
+# one incident in A quarter mile north of Fort Pierce Inlet Florida
+Inland <- SA_tab[grep("A quarter mile north of Fort Pierce Inlet",
+                      SA_tab$Location),] 
+read_df[which(read_df$CaseNumber==Inland$CaseNumber),2:3] <-
+  c(-80.3164,27.5317)
+# one incident in Curlew Island, Breton Sound, LA
+Inland <- SA_tab[grep("Curlew Island, Breton Sound",
+                      SA_tab$Location),] 
+read_df[which(read_df$CaseNumber==Inland$CaseNumber),2:3] <-
+  c(-88.9686,29.6466)
+# one incident in Midnight Lump, LA
+Inland <- SA_tab[grep("Midnight Lump",
+                      SA_tab$Location),] 
+read_df[which(read_df$CaseNumber==Inland$CaseNumber),2:3] <-
+  c(-89.3341,28.3825)
+# Dog Patch, San Onofre, CA is actually San Onofre State Beach
+Inland <- SA_tab[grep("Dog Patch, San Onofre",
+                      SA_tab$Location),] 
+read_df[which(read_df$CaseNumber==Inland$CaseNumber),2:3] <-
+  c(-117.5731,33.3811)
+# Bird Rock, Tomales Point, CA 
+Inland <- SA_tab[grep("Bird Rock, Tomales Point",
+                      SA_tab$Location),] %>% filter(Year==1996)
+read_df[which(read_df$CaseNumber==Inland$CaseNumber),2:3] <-
+  c(-122.9944,38.23)
+# Ano Nuevo State Reserve, Davenport County, CA
+Inland <- SA_tab[grep("Ano Nuevo State Reserve, Davenport County",
+                      SA_tab$Location),] 
+read_df[which(read_df$CaseNumber%in%Inland$CaseNumber),2:3] <-
+  c(-122.3066,37.1188)
+# Southeast Farallon Island, Farallon Islands, CA is actually San Onofre State Beach
+Inland <- SA_tab[grep("Southeast Farallon Island",
+                      SA_tab$Location),] 
+read_df$lon[which(read_df$CaseNumber%in%Inland$CaseNumber)] <- -123.0034
+read_df$lat[which(read_df$CaseNumber%in%Inland$CaseNumber)] <- 37.69891
+# Monastery Beach, Carmel River State Park, Monterey Peninsula, Monterey, CA 
+Inland <- SA_tab[grep("Monastery Beach, Carmel River State Park",
+                      SA_tab$Location),] 
+read_df[which(read_df$CaseNumber==Inland$CaseNumber),2:3] <-
+  c(-121.9268,36.5236)
+# North Farallon Island, Farallon Islands, CA 
+Inland <- SA_tab[grep("North Farallon Island, Farallon Islands",
+                      SA_tab$Location),] 
+read_df[which(read_df$CaseNumber==Inland$CaseNumber),2:3] <-
+  c(-123.09912,37.7676)
+# Klamath River, Del Norte County, CA is actually the Klamath River mouth around Requa
+Inland <- SA_tab[grep("Klamath River, Del Norte County",
+                      SA_tab$Location),] 
+read_df$lon[which(read_df$CaseNumber %in% Inland$CaseNumber)] <- -124.0653
+read_df$lat[which(read_df$CaseNumber %in% Inland$CaseNumber)] <- 41.5469
+
+# plot world map
+map("world", fill=TRUE, col="white", bg="lightblue", 
+    ylim=c(-60, 90), mar=c(0,0,0,0))
+read_df <- read_df %>% na.omit() 
+points(read_df$lon,read_df$lat, col="red", pch=16)
+
+# old approach - seems not working
+#locations <- ldply(address,
+#                   function(x) geoCode(x))
+# loc <- data.frame(world_tab$CaseNumber,world_tab$Date,t(locations)) %>%
+#  na.omit()
+#colnames(loc) <- c("CaseNumber","day","lat","lon","location_type",
+#                   "forAddress")
+
+#map("world", fill=TRUE, col="white", bg="lightblue", ylim=c(-60, 90), mar=c(0,0,0,0))
+#points(as.numeric(loc$lon),as.numeric(loc$lat), col="red", pch=20)
+```
+
+### Shark attacks in USA
+
+Let's plot the shark attacks in USA.  Note that the one far inland was the incident at Alberquerqy aquarium in New Mexicao.
+
+First, compute kmeans clusters.
+
+```{r}
+USA_tab <- SA_tab %>% filter(Country=="USA") %>% left_join(read_df) %>% na.omit() 
+USA_tab$clusterID <- kmeans(USA_tab[c("lon","lat")],4)$cluster
+```
+
+A summary table listing number of shark attacks ocurred in each state is given in the following.
+
+```{r}
+suppressMessages(library(sp))
+suppressMessages(library(rgdal))
+
+#lat and long
+coords <- USA_tab %>% select(lon,lat) %>% as.matrix()
+points <- SpatialPoints(coords)
+
+#SpatialPolygonDataFrame - I'm using a shapefile of USA
+usa.states <- readOGR(dsn="states_21basic", layer="states")
+
+#my_state <- usa.states[usa.states$STATE_NAME == "Texas", ]
+#plot(my_state)
+
+#assume same proj as shapefile!
+proj4string(points) <- proj4string(usa.states)
+#get county polygon point is in
+result <- as.data.frame(table(tolower(as.character(over(points, usa.states)$STATE_NAME))))
+colnames(result) <- c("state","count")
+result
+```
+
+Two representations of attack occurence in each state are plotted: (1) dense color vs. light color, and (2) color by cluster ID.
+
+```{r}
+# plot attack locations based on cluster ID
+suppressMessages(library(choroplethr))
+suppressMessages(library(choroplethrMaps))
+
+data(state.regions)
+df_state_count <- state.regions %>% left_join(result,by=c("region"="state")) %>%
+  mutate(value=ifelse(is.na(count),0,count)) %>% select(region,value)
+state_choropleth(df_state_count, title="Number of shark attacks",
+                 legend = "count", num_colors=1)
+
+# color by cluster ID
+map("state", interior = FALSE)
+map("state", boundary = FALSE, col="gray", add = TRUE)
+points(USA_tab$lon, USA_tab$lat, col=USA_tab$clusterID, pch=20)
+```
+
+## World Ocean Database
+### Download NOAA sea temperatures files in the format of ncdf4
+
+The demo following the instruction @ http://lukemiller.org/index.php/2014/11/extracting-noaa-sea-surface-temperatures-with-ncdf4/ is coded in the R chunk as follows.  Data are downloaded from http://www.ncdc.noaa.gov/oisst.
+
+Load the R code for reading the daily SST data from the NOAA data sets.
+
+```{r, echo=FALSE}
+source("NOAA_OISST_ncdf4.R")
+```
+
+Retrieve the daily mean of sea surface temperature and plot the distribution on the world map.  For a demonstration, the dataset "daily/sst.day.mean.2015.v2.nc" is used.  Because of the limitation of 100 MB per file, the data file "daily/sst.day.mean.2015.v2.nc" can be downloaded from [my google drive] (https://drive.google.com/a/harvard.edu/file/d/0B_XEyQTogiHOdjdtQkdFeEhVT2s/view?usp=sharing) .
+
+```{r, echo=FALSE}
+# lonW=80,lonE=110,latS=17,latN=35 has values -- A test case for the world
+ssts = extractOISSTdaily("daily/sst.day.mean.2015.v2.nc","daily/lsmask.oisst.v2.nc",
+                      lonW=0.125,lonE=359.875,latS=-89.875,latN=89.875,date1='2015-07-23',date2='2015-07-24')
+plotOISST(ssts,1)
+# for a specific location
+#ssts = extractOISSTdaily("daily/sst.day.mean.2015.v2.nc","daily/lsmask.oisst.v2.nc",
+#   lonW=80,lonE=110,latS=20,latN=35,date1='2015-09-20',date2='2015-09-21')
+#plotOISST(ssts,1)
+# points(98.7,29.94, col="red", pch=16)
+# test the algorithm for retrieving the temp
+#day <- 1
+#any(!is.na(ssts[, ,day]))
+#with_value <- !is.na(ssts[, ,day])
+#sst2 <- ssts[, ,day]
+#mean(sst2[with_value])
+```
+
+### Data retrieval
+
+Apply the algorithm, which is designed to extend the area (5 degrees in each direction) in case a NA value is returned for a specific location, to the shark attack data.  Mean value is calculated from all the values in the extension area.  Temperature values with respect to each attack incident are saved to a file provided for data analytics.
+
+```{r }
+mean_temp <- function(loc) {
+  lon <- as.numeric(loc[2])
+  lat <- as.numeric(loc[3])
+  day <- as.Date(loc[1])
+    lonarg <- c(floor(lon),ceiling(lon))
+    latarg <- c(floor(lat),ceiling(lat))
+    ssts = extractOISSTdaily(
+                paste0("daily/sst.day.mean.",year(day),".v2.nc"),
+                   "daily/lsmask.oisst.v2.nc",
+                   lonW=lonarg[1],lonE=lonarg[2],
+                    latS=latarg[1],latN=latarg[2],
+                         date1=day)
+    while(all(is.na(ssts))) {
+      lonarg <- lonarg + c(-1,1)*5
+      latarg <- latarg + c(-1,1)*5
+      ssts = extractOISSTdaily(
+             paste0("daily/sst.day.mean.",year(day),".v2.nc"),
+                   "daily/lsmask.oisst.v2.nc",
+                   lonW=lonarg[1],lonE=lonarg[2],
+                    latS=latarg[1],latN=latarg[2],
+                         date1=day)
+    }
+    with_value <- !is.na(ssts)
+    mean(ssts[with_value])
+}
+# remove words after year, before date, convert to 2-digit year
+USA_tab$Date<- gsub ("([0-9]*)\\.(.*)$","\\1",USA_tab$Date)
+USA_tab$Date <- gsub("(^\\w*\\s*)\\d","1",USA_tab$Date)
+USA_tab$Date <- gsub("(.*)-(..)(..)$", "\\1-\\3", USA_tab$Date)
+
+# The following section of code is no longer needed 
+# once the temperature file "USA_LocTemp.csv" has been generated
+# especially these 36 files with 18GB in total cannot be stored in github,
+# nor the downloadable link is available.
+# 
+# fixing year 0-68 --> 2000-2068
+#loc <- USA_tab %>% mutate(cleanDate=as.Date(Date,format="%d-%b-%y")) %>%
+#  mutate(cleanDate=as.Date(ifelse(cleanDate > "2016-4-30",
+#                                  format(cleanDate, "19%y-%m-%d"),
+#                                  format(cleanDate)))) %>% 
+#  na.omit() %>% filter(year(cleanDate) >= 1981) %>% 
+#  arrange(cleanDate) %>% select(cleanDate,lon,lat,CaseNumber)
+
+#loc$lon <- loc$lon+180
+#loc$lat <- loc$lat
+
+#loc$temp <- apply(loc,1,mean_temp)
+#write_csv(loc, "Ruth_Temp_5-3-2016.csv")
+```
