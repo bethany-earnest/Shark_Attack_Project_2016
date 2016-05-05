@@ -65,19 +65,19 @@ Some details on how each type of data was collected are captured below. Addition
 
 The Activity column of the shark attack data set contains free-form textual information describing what a person was doing when attacked by a shark. By analyzing these activities, we developed a discrete-valued, categorical variable to include in our attack fatality prediction model. The variable consists of single-word terms extracted and derived from activity entries. This set of terms was then used to label the attack entries.
 
-[Activity](Activity.html)
+[Activity]("Activity.html")
 
 ###Species:
 
 The Species column of the shark attack data set contains free-form textual information describing the shark involved in a shark attack. Analysis and extraction of terms in the species data led to the creation of a discrete-valued, categorical variable to include in our attack fatality prediction model.
 
-[Species](Species.html)
+[Species]("Species.html")
 
 ###Temp:
 
 The main goal of the data exploration is to retrieve sea surface temperature (SST) from the NOAA web site, which hosts 36 files storing data from 1981 to 2016.  Each file (~450 MB) stores daily mean SST each year.  The stark attack dataset provides the attack location, area, and country, which are used for the conversion to (latitude, longitude) coordinate via google API.  Some locations were not recorded correctly or accurately, so manual correction was required.  Via visualizing the attack locations marked on the map, we can further clean erroneous data points.  The temperature (SST) is one of explanatory variables in the shark attack data analytics.  Apply the algorithm, which is designed to extend the area (5 degrees in each direction) in case a NA value is returned for a specific location, to the shark attack data.  Mean value is calculated from all the values in the extension area.  Temperature values with respect to each attack incident are saved to a file provided for data analytics.
 
-[Temp](TempMap-Cheng.html)
+[Temp]("TempMap-Cheng.html")
 
 ###Coastline:
 
@@ -115,19 +115,19 @@ Activities<-read.csv(paste(path,"Sam_Activities_5-4-2016.csv", sep=""))
 Activities$Case.Number<-Activities$CaseNumber
 Activities$CaseNumber<-NULL
 ```
-[Activity](Activity.html)
+[Activity]("Activity.html")
 ```{r}
 Species<-read.csv(paste(path,"Sam_Species_5-3-2016.csv", sep=""))
 Species$Case.Number<-Species$CaseNumber
 Species$CaseNumber<-NULL
 ```
-[Species](Species.html)
+[Species]("Species.html")
 ```{r}
 Temp<-read.csv(paste(path,"Ruth_Temp_5-3-2016.csv", sep=""))
 Temp$Case.Number<-Temp$CaseNumber
 Temp$CaseNumber<-NULL
 ```
-[Temp](TempMap-Cheng.html)
+[Temp]("TempMap-Cheng.html")
 ```{r}
 Coast_Line<-read.csv(paste(path,"Beth_Coastline_5-3-2016.csv", sep=""))
 Coast_Line$Area<-str_trim(Coast_Line$State)
