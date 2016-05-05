@@ -1,5 +1,5 @@
 ---
-title: "Factors Associated with Shark Attack"
+title: "Factors Associated with Shark Attacks"
 output: html_document
 ---
 ```{r, echo=FALSE}
@@ -45,7 +45,7 @@ Using the Global Shark Attack File, a comprehensive data set capturing shark att
 #Initial Question:
 Staring out, we had three questions we would like to answer:
 
-1)	What variables are associated with a shark attack being fatal?
+1)  What variables are associated with a shark attack being fatal?
 2)	Over time, are there elements that contribute to an increase (or decrease) in shark attacks in a given area?
 3)	Could we use the elements of the attack (where it was, when it was, how it was committed) to cluster similar attacks in such a way as to draw conclusions about the offending shark species, in cases where a species had not been identified?
 
@@ -94,8 +94,7 @@ Major variable creation and collection aside, the not insubstantial tactical eff
 ###Create Data Set
 ####Load Raw Attack Data
 ```{r}
-path<-"Y:/Personal/Harvard/Spring2016/Project/Source_Data/"
-#path<-"C:/Users/bethany.earnest/Desktop/Harvard/Spring2016/Project/"
+path<-""
 
 #Load Attack Data
 Attacks <- read.csv(paste(path,"Shark_Attack_Data_4-7-2016.csv", sep=""))
